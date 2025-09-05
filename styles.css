@@ -1,0 +1,38 @@
+/* Cambiar fondo de la barra de navegación */
+.navbar {
+    background-color: #2F2E4E !important;
+    /* azul oscuro */
+}
+
+/* Ítem normal en la barra */
+.navbar .navbar-nav>li>a {
+    color: #ffffff !important;
+}
+
+/* Ítem activo en la barra de navegación */
+.navbar-nav>.active>a,
+.navbar-nav>.active>a:focus,
+.navbar-nav>.active>a:hover {
+    background-color: #3F3E6B !important;
+    /* azul intermedio */
+    color: #ffffff !important;
+}
+
+/* Ítem al pasar el mouse */
+.navbar-nav>li>a:hover {
+    background-color: #5A5896 !important;
+    /* azul más claro */
+    color: #ffffff !important;
+}
+
+/* Cambiar fondo de valueBox azul */
+.value-box {
+    background-color: #2F2E4E !important;
+    color: white !important;
+}
+
+/* Cambiar color de iconos */
+.value-box i {
+    color: white !important;
+    opacity: 0.5;
+}

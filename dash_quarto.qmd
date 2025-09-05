@@ -1,0 +1,259 @@
+---
+title: "Reporte Epidemiológico SI.VI.LE 2024"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+    css: styles.css
+runtime: shiny
+---
+
+```{r}
+pacman::p_load(
+  # Interactivo
+  shiny,
+  flexdashboard,
+  leaflet,
+  # Tablas
+  reactable,
+  # Gráficos
+  scico,
+  apyramid,
+  # Mapas
+  geoAr,
+  sf,
+  # Manejo datos
+  rio,
+  janitor,
+  tidyverse
+)
+```
+
+```{r}
+#|id:  Cargar datos SIVILE
+datos <- import("clean/datos_sivile_2024.csv") |>
+  mutate(across(
+    .cols = where(is.character) | codigo_institucion_id,
+    .fns = ~ factor(.x)
+  ))
+```
+
+```{r}
+#| id:  Cargar shapefile provincias
+shp_prov <- get_geo("ARGENTINA") |>
+  # Agrupar provincias
+  count(codprov_censo) |>
+
+  # Validar geometría
+  st_make_valid() |>
+
+  # Añadir códigos provincia
+  left_join(
+    show_arg_codes() |>
+      # id provincia a numérico
+      mutate(codprov = parse_number(codprov)) |>
+      # Filtrar totales
+      filter(between(codprov, 1, 24))
+  ) |>
+
+  # Seleccionar columnas
+  select(codprov_censo, id, prov_lesion_id = codprov, prov_lesion = name_iso) |>
+
+  # Añadir frecuencias por sexo
+  left_join(
+    datos |>
+      tabyl(prov_lesion, sexo)
+  ) |>
+
+  # Añadir frecuencias por edad
+  left_join(
+    datos |>
+      tabyl(prov_lesion, grupo_edad) |>
+      adorn_totals(where = "col")
+  )
+```
+
+# UCL
+## Columna_1 {data-width="250"}
+
+### UCL SIVILE ACTIVAS
+
+```{r}
+valueBox(
+  value = nlevels(datos$codigo_institucion_id),
+  icon = "fa-hospital-o"
+)
+```
+
+### Registros totales
+
+```{r}
+valueBox(
+  value = nrow(read_delim(
+    "raw/export_Sistema_de_Vigilancia_de_Lesiones_SIVILE_Completo_2024.txt"
+  )),
+  icon = "fa-file-text"
+)
+```
+
+### Registros válidos[^1]
+
+[^1]: Datos completos para sexo, edad, provincia de ocurrencia y mecanismo de la lesión
+
+```{r}
+valueBox(value = nrow(datos), icon = "fa-file-text")
+```
+
+## Tabla {data-width="750"}
+
+```{r}
+#| id:  Tabla frecuencia x UCL
+# Crear tabla
+datos |>
+  tabyl(codigo_institucion_id) |>
+  arrange(-n) |>
+  adorn_pct_formatting() |>
+  rename(UCL = codigo_institucion_id, Frecuencia = n, "%" = percent) |>
+
+  #  Opciones interactivas
+  reactable(
+    pageSizeOptions = c(10, 25, 50),
+    resizable = TRUE,
+    compact = TRUE,
+    highlight = TRUE,
+    bordered = TRUE,
+    striped = TRUE,
+    showSortable = TRUE,
+    showPageSizeOptions = TRUE
+  )
+```
+
+# Provincia
+## Mapa {.fill}
+### Distribución de lesiones por causas externas por provincia 
+
+```{r}
+#| id: Mapa interactivo
+## Variables
+vars <- c(
+  "Total",
+  "Femenino",
+  "Masculino",
+  "0-1 años",
+  "2-4 años",
+  "5-9 años",
+  "10-14 años",
+  "15-24 años",
+  "25-44 años",
+  "45-64 años",
+  "65+ años"
+)
+
+## Crear paleta global con el rango de todas las variables
+pal <- colorNumeric(
+  palette = scico(n = 10, palette = "tokyo", direction = -1),
+  domain = c(0, max(shp_prov$Total, na.rm = TRUE))
+)
+
+## Crear mapa interactivo
+shp_prov |>
+  leaflet() |>
+
+  # Mapa base
+  addProviderTiles("CartoDB.PositronNoLabels") |>
+
+  (\(mapa) {
+    # Agregar todas las capas
+    for (var in vars) {
+      mapa <- mapa |>
+        addPolygons(
+          fillColor = ~ pal(get(var)),
+          color = "grey",
+          weight = 1,
+          opacity = 0.5,
+          fillOpacity = 0.7,
+          group = var
+        )
+    }
+    mapa
+  })() |>
+
+  # Control de capas
+  addLayersControl(
+    baseGroups = c("Mapa base"),
+    overlayGroups = vars
+  ) |>
+  hideGroup(vars[-1]) |>
+  showGroup("Total") |>
+
+  # Añadir leyenda global
+  addLegend(
+    pal = pal,
+    values = shp_prov$Total,
+    title = "Frecuencia",
+    # na.label = "Sin datos",
+    position = "bottomright"
+  )
+
+```
+
+## Tabla {.fill}
+### Frecuencia de lesiones por causas externas por provincia 
+
+```{r}
+#| id: Tabla interactiva x provincia
+# Dataset para la tabla
+datos_prov <- datos |>
+  select(
+    Provincia = prov_lesion,
+    Sexo = sexo,
+    Edad = grupo_edad,
+    Mecanismo = mecanismo_cat,
+    Intencionalidad = intencionalidad_cat
+  )
+
+
+## Selector de variables
+ui <- fluidPage(
+  checkboxGroupInput(
+    inputId = "vars",
+    label = "Variables:",
+    choices = names(datos_prov)[-1],
+    inline = TRUE
+  ),
+  reactableOutput("tabla")
+)
+
+## Tabla
+server <- function(input, output, session) {
+  output$tabla <- renderReactable({
+    # Variables a agrupar
+    vars <- c("Provincia", input$vars)
+
+    # Calcular frecuencias y porcentaje
+    datos_prov |>
+      count(across(all_of(vars))) |>
+      mutate(pct = round(n / sum(n) * 100, 2)) |>
+
+      # Crear tabla reactable
+      reactable(
+        columns = list(
+          n = colDef(name = "Frecuencia"),
+          pct = colDef(name = "%")
+        ),
+        pageSizeOptions = c(10, 25, 50),
+        filterable = TRUE,
+        defaultPageSize = 20,
+        compact = TRUE,
+        highlight = TRUE,
+        bordered = TRUE,
+        striped = TRUE,
+        showSortable = TRUE,
+        showPageSizeOptions = TRUE
+      )
+  })
+}
+
+## Mostrar tabla
+shinyApp(ui, server)
+```
